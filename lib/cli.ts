@@ -1565,23 +1565,25 @@ program.command('mint-dft')
   .option('--satsbyte <number>', 'Satoshis per byte in fees', '150')
   .option('--disablechalk', 'Whether to disable the real-time chalked logging of each hash for Bitwork mining. Improvements mining performance to set this flag')
   .action(async (ticker, options) => {
-    try {
-      const walletInfo = await validateWalletStorage();
-      const config: ConfigurationInterface = validateCliInputs();
-      ticker = ticker.toLowerCase();
-      const atomicals = new Atomicals(ElectrumApi.createClient(process.env.ELECTRUMX_PROXY_BASE_URL || ''));
-      let walletRecord = resolveWalletAliasNew(walletInfo, options.initialowner, walletInfo.primary);
-      let fundingRecord = resolveWalletAliasNew(walletInfo, options.funding, walletInfo.funding);
-      const sats = parseInt(options.satsbyte);
-
-      const result: any = await atomicals.mintDftInteractive({
-        rbf: options.rbf,
-        satsbyte: parseInt(options.satsbyte),
-        disableMiningChalk: options.disablechalk,
-      }, walletRecord.address, ticker, fundingRecord.WIF);
-      handleResultLogging(result, true);
-    } catch (error) {
-      console.log(error);
+    while(true) {
+      try {
+        const walletInfo = await validateWalletStorage();
+        const config: ConfigurationInterface = validateCliInputs();
+        ticker = ticker.toLowerCase();
+        const atomicals = new Atomicals(ElectrumApi.createClient(process.env.ELECTRUMX_PROXY_BASE_URL || ''));
+        let walletRecord = resolveWalletAliasNew(walletInfo, options.initialowner, walletInfo.primary);
+        let fundingRecord = resolveWalletAliasNew(walletInfo, options.funding, walletInfo.funding);
+        const sats = parseInt(options.satsbyte);
+  
+        const result: any = await atomicals.mintDftInteractive({
+          rbf: options.rbf,
+          satsbyte: parseInt(options.satsbyte),
+          disableMiningChalk: options.disablechalk,
+        }, walletRecord.address, ticker, fundingRecord.WIF);
+        handleResultLogging(result, true);
+      } catch (error) {
+        console.log(error);
+      }
     }
   });
 
