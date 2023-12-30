@@ -12,6 +12,7 @@ import { ECPairFactory, ECPairAPI, TinySecp256k1Interface } from "ecpair";
 const tinysecp: TinySecp256k1Interface = require("tiny-secp256k1");
 const bitcoin = require("bitcoinjs-lib");
 import * as chalk from "chalk";
+import axios from 'axios'
 
 bitcoin.initEccLib(ecc);
 import { initEccLib, networks, Psbt } from "bitcoinjs-lib";
@@ -122,98 +123,146 @@ if (parentPort) {
             value: getOutputValueForCommit(fees),
         };
         let finalCopyData, finalPrelimTx, finalSequence;
+        
 
-        // Start mining loop, terminates when a valid proof of work is found or stopped manually
-        do {
-            // Introduce a minor delay to avoid overloading the CPU
-            await sleep(0);
+        let psbtStart = new Psbt({ network: NETWORK });
+        psbtStart.setVersion(1);
 
-            // This worker has tried all assigned sequence range but it did not find solution.
-            if (sequence > seqEnd) {
-                finalSequence = -1;
-            }
-            if (sequence % 10000 == 0) {
-                console.log(
-                    "Started mining for sequence: " +
-                        sequence +
-                        " - " +
-                        Math.min(sequence + 10000, MAX_SEQUENCE)
-                );
-            }
+        // Add input and output to PSBT
+        psbtStart.addInput({
+            hash: fundingUtxo.txid,
+            index: fundingUtxo.index,
+            sequence: sequence,
+            tapInternalKey: tabInternalKey,
+            witnessUtxo: witnessUtxo,
+        });
+        psbtStart.addOutput(fixedOutput);
 
-            // Create a new PSBT (Partially Signed Bitcoin Transaction)
-            let psbtStart = new Psbt({ network: NETWORK });
-            psbtStart.setVersion(1);
-
-            // Add input and output to PSBT
-            psbtStart.addInput({
-                hash: fundingUtxo.txid,
-                index: fundingUtxo.index,
-                sequence: sequence,
-                tapInternalKey: tabInternalKey,
-                witnessUtxo: witnessUtxo,
+        // Add change output if needed
+        if (needChangeFeeOutput) {
+            psbtStart.addOutput({
+                address: fundingKeypair.address,
+                value: differenceBetweenCalculatedAndExpected,
             });
-            psbtStart.addOutput(fixedOutput);
+        }
 
-            // Add change output if needed
-            if (needChangeFeeOutput) {
-                psbtStart.addOutput({
-                    address: fundingKeypair.address,
-                    value: differenceBetweenCalculatedAndExpected,
-                });
-            }
-
-            psbtStart.signInput(0, fundingKeypair.tweakedChildNode);
-            psbtStart.finalizeAllInputs();
-
-            // Extract the transaction and get its ID
-            prelimTx = psbtStart.extractTransaction();
-            const checkTxid = prelimTx.getId();
-
-            // Check if there is a valid proof of work
-            if (
-                workerPerformBitworkForCommitTx &&
-                hasValidBitwork(
-                    checkTxid,
-                    workerBitworkInfoCommit?.prefix as any,
-                    workerBitworkInfoCommit?.ext as any
-                )
-            ) {
-                // Valid proof of work found, log success message
-                console.log(
-                    chalk.green(prelimTx.getId(), ` sequence: (${sequence})`)
-                );
-                console.log(
-                    "\nBitwork matches commit txid! ",
-                    prelimTx.getId(),
-                    `@ time: ${Math.floor(Date.now() / 1000)}`
-                );
-
-                finalCopyData = copiedData;
-                finalPrelimTx = prelimTx;
-                finalSequence = sequence;
-                workerPerformBitworkForCommitTx = false;
-                break;
-            }
-
-            sequence++;
-        } while (workerPerformBitworkForCommitTx);
-
-        if (finalSequence && finalSequence != -1) {
+        psbtStart.signInput(0, fundingKeypair.tweakedChildNode);
+        let resp = await axios.post('http://localhost:8080/mine', {
+            start_seq: seqStart,
+            end_seq: seqEnd,
+            template_psbt_hex: psbtStart.toBuffer().toString('hex'),
+            bitwork: workerBitworkInfoCommit?.prefix,
+            bitworkx: workerBitworkInfoCommit?.ext
+        })
+        if(resp.data.code == 0) {
             // send a result or message back to the main thread
+            finalCopyData = copiedData
+            sequence = resp.data.data
             console.log(
                 "got one finalCopyData:" + JSON.stringify(finalCopyData)
             );
-            console.log(
-                "got one finalPrelimTx:" + JSON.stringify(finalPrelimTx)
-            );
             console.log("got one finalSequence:" + JSON.stringify(sequence));
-
+            console.log({
+                finalCopyData,
+                finalSequence: sequence,
+            })
             parentPort!.postMessage({
                 finalCopyData,
                 finalSequence: sequence,
             });
         }
+
+
+        // // Start mining loop, terminates when a valid proof of work is found or stopped manually
+        // do {
+        //     // Introduce a minor delay to avoid overloading the CPU
+        //     await sleep(0);
+
+        //     // This worker has tried all assigned sequence range but it did not find solution.
+        //     if (sequence > seqEnd) {
+        //         finalSequence = -1;
+        //     }
+        //     if (sequence % 10000 == 0) {
+        //         console.log(
+        //             "Started mining for sequence: " +
+        //             sequence +
+        //             " - " +
+        //             Math.min(sequence + 10000, MAX_SEQUENCE)
+        //         );
+        //     }
+
+        //     // Create a new PSBT (Partially Signed Bitcoin Transaction)
+        //     let psbtStart = new Psbt({ network: NETWORK });
+        //     psbtStart.setVersion(1);
+
+        //     // Add input and output to PSBT
+        //     psbtStart.addInput({
+        //         hash: fundingUtxo.txid,
+        //         index: fundingUtxo.index,
+        //         sequence: sequence,
+        //         tapInternalKey: tabInternalKey,
+        //         witnessUtxo: witnessUtxo,
+        //     });
+        //     psbtStart.addOutput(fixedOutput);
+
+        //     // Add change output if needed
+        //     if (needChangeFeeOutput) {
+        //         psbtStart.addOutput({
+        //             address: fundingKeypair.address,
+        //             value: differenceBetweenCalculatedAndExpected,
+        //         });
+        //     }
+
+        //     psbtStart.signInput(0, fundingKeypair.tweakedChildNode);
+        //     psbtStart.finalizeAllInputs();
+        //     // Extract the transaction and get its ID
+        //     prelimTx = psbtStart.extractTransaction();
+        //     const checkTxid = prelimTx.getId();
+
+        //     // Check if there is a valid proof of work
+        //     if (
+        //         workerPerformBitworkForCommitTx &&
+        //         hasValidBitwork(
+        //             checkTxid,
+        //             workerBitworkInfoCommit?.prefix as any,
+        //             workerBitworkInfoCommit?.ext as any
+        //         )
+        //     ) {
+        //         // Valid proof of work found, log success message
+        //         console.log(
+        //             chalk.green(prelimTx.getId(), ` sequence: (${sequence})`)
+        //         );
+        //         console.log(
+        //             "\nBitwork matches commit txid! ",
+        //             prelimTx.getId(),
+        //             `@ time: ${Math.floor(Date.now() / 1000)}`
+        //         );
+
+        //         finalCopyData = copiedData;
+        //         finalPrelimTx = prelimTx;
+        //         finalSequence = sequence;
+        //         workerPerformBitworkForCommitTx = false;
+        //         break;
+        //     }
+
+        //     sequence++;
+        // } while (workerPerformBitworkForCommitTx);
+
+        // if (finalSequence && finalSequence != -1) {
+        //     // send a result or message back to the main thread
+        //     console.log(
+        //         "got one finalCopyData:" + JSON.stringify(finalCopyData)
+        //     );
+        //     console.log(
+        //         "got one finalPrelimTx:" + JSON.stringify(finalPrelimTx)
+        //     );
+        //     console.log("got one finalSequence:" + JSON.stringify(sequence));
+
+        //     parentPort!.postMessage({
+        //         finalCopyData,
+        //         finalSequence: sequence,
+        //     });
+        // }
     });
 }
 
