@@ -64,6 +64,7 @@ import { witnessStackToScriptWitness } from "../commands/witness_stack_to_script
 import { IInputUtxoPartial } from "../types/UTXO.interface";
 import { IWalletRecord } from "./validate-wallet-storage";
 import { parentPort, Worker } from "worker_threads";
+import { WorkerInput, doWork } from "./miner-worker";
 
 const ECPair: ECPairAPI = ECPairFactory(tinysecp);
 export const DEFAULT_SATS_BYTE = 10;
@@ -77,7 +78,7 @@ export const OUTPUT_BYTES_BASE = 43;
 export const EXCESSIVE_FEE_LIMIT: number = 500000; // Limit to 1/200 of a BTC for now
 export const MAX_SEQUENCE = 0xffffffff;
 
-interface WorkerOut {
+export interface WorkerOut {
     finalCopyData: AtomicalsPayload;
     finalSequence: number;
 }
@@ -131,8 +132,7 @@ function printBitworkLog(bitworkInfo: BitworkInfo, commit?: boolean) {
         return;
     }
     console.log(
-        `\nAtomicals Bitwork Mining - Requested bitwork proof-of-work mining for the ${
-            commit ? "commit" : "reveal"
+        `\nAtomicals Bitwork Mining - Requested bitwork proof-of-work mining for the ${commit ? "commit" : "reveal"
         } transaction.`
     );
     if (commit) {
@@ -176,16 +176,16 @@ export interface AtomicalOperationBuilderOptions {
     satsbyte?: number; // satoshis
     address: string;
     opType:
-        | "nft"
-        | "ft"
-        | "dft"
-        | "dmt"
-        | "dat"
-        | "mod"
-        | "evt"
-        | "sl"
-        | "x"
-        | "y";
+    | "nft"
+    | "ft"
+    | "dft"
+    | "dmt"
+    | "dat"
+    | "mod"
+    | "evt"
+    | "sl"
+    | "x"
+    | "y";
     requestContainerMembership?: string;
     bitworkc?: string;
     bitworkr?: string;
@@ -620,7 +620,6 @@ export class AtomicalOperationBuilder {
         }
 
         let unixtime = Math.floor(Date.now() / 1000);
-        let nonce = Math.floor(Math.random() * 10000000);
         let noncesGenerated = 0;
         let atomicalId: string | null = null;
         let commitTxid: string | null = null;
@@ -687,128 +686,23 @@ export class AtomicalOperationBuilder {
         // Logging the set concurrency level to the console
         console.log(`Concurrency set to: ${concurrency}`);
         const workerOptions = this.options;
+        // @ts-ignore
         const workerBitworkInfoCommit = this.bitworkInfoCommit;
 
-        let workers: Worker[] = [];
-        let resolveWorkerPromise;
 
-        // Create a promise to await the completion of worker tasks
-        const workerPromise = new Promise((resolve) => {
-            resolveWorkerPromise = resolve;
-        });
 
-        let isWorkDone = false;
-
-        // Function to stop all worker threads
-        const stopAllWorkers = () => {
-            workers.forEach((worker) => {
-                worker.terminate();
-            });
-            workers = [];
-        };
 
         // Calculate the range of sequences to be assigned to each worker
         const seqRangePerWorker = Math.floor(MAX_SEQUENCE / concurrency);
 
         // Initialize and start worker threads
+        let promises: Promise<WorkerOut>[] = []
+        let messageInputs: any[] = []
         for (let i = 0; i < concurrency; i++) {
             console.log("Initializing worker: " + i);
-            const worker = new Worker("./dist/utils/miner-worker.js");
 
             // Handle messages from workers
-            worker.on("message", (message: WorkerOut) => {
-                console.log("Solution found, try composing the transaction...");
 
-                if (!isWorkDone) {
-                    isWorkDone = true;
-                    stopAllWorkers();
-
-                    const atomPayload = new AtomicalsPayload(
-                        message.finalCopyData
-                    );
-
-                    const updatedBaseCommit: {
-                        scriptP2TR;
-                        hashLockP2TR;
-                        hashscript;
-                    } = prepareCommitRevealConfig(
-                        workerOptions.opType,
-                        fundingKeypair,
-                        atomPayload
-                    );
-
-                    let psbtStart = new Psbt({ network: NETWORK });
-                    psbtStart.setVersion(1);
-
-                    psbtStart.addInput({
-                        hash: fundingUtxo.txid,
-                        index: fundingUtxo.index,
-                        sequence: message.finalSequence,
-                        tapInternalKey: Buffer.from(
-                            fundingKeypair.childNodeXOnlyPubkey as number[]
-                        ),
-                        witnessUtxo: {
-                            value: fundingUtxo.value,
-                            script: Buffer.from(fundingKeypair.output, "hex"),
-                        },
-                    });
-                    psbtStart.addOutput({
-                        address: updatedBaseCommit.scriptP2TR.address,
-                        value: this.getOutputValueForCommit(fees),
-                    });
-
-                    this.addCommitChangeOutputIfRequired(
-                        fundingUtxo.value,
-                        fees,
-                        psbtStart,
-                        fundingKeypair.address
-                    );
-
-                    psbtStart.signInput(0, fundingKeypair.tweakedChildNode);
-                    psbtStart.finalizeAllInputs();
-
-                    const interTx = psbtStart.extractTransaction();
-
-                    const rawtx = interTx.toHex();
-                    AtomicalOperationBuilder.finalSafetyCheckForExcessiveFee(
-                        psbtStart,
-                        interTx
-                    );
-                    if (!this.broadcastWithRetries(rawtx)) {
-                        console.log("Error sending", interTx.getId(), rawtx);
-                        throw new Error(
-                            "Unable to broadcast commit transaction after attempts: " +
-                                interTx.getId()
-                        );
-                    } else {
-                        console.log("Success sent tx: ", interTx.getId());
-                    }
-
-                    commitMinedWithBitwork = true;
-                    performBitworkForCommitTx = false;
-                    // In both scenarios we copy over the args
-                    if (!performBitworkForCommitTx) {
-                        scriptP2TR = updatedBaseCommit.scriptP2TR;
-                        hashLockP2TR = updatedBaseCommit.hashLockP2TR;
-                    }
-
-                    // Resolve the worker promise with the received message
-                    resolveWorkerPromise(message);
-                }
-            });
-            worker.on("error", (error) => {
-                console.error("worker error: ", error);
-                if (!isWorkDone) {
-                    isWorkDone = true;
-                    stopAllWorkers();
-                }
-            });
-
-            worker.on("exit", (code) => {
-                if (code !== 0) {
-                    console.error(`Worker stopped with exit code ${code}`);
-                }
-            });
 
             // Calculate sequence range for this worker
             const seqStart = i * seqRangePerWorker;
@@ -818,10 +712,9 @@ export class AtomicalOperationBuilder {
             if (i === concurrency - 1) {
                 seqEnd = MAX_SEQUENCE - 1;
             }
-
-            // Send necessary data to the worker
-            const messageToWorker = {
-                copiedData,
+            let ccopiedData = JSON.parse(JSON.stringify(copiedData))
+            const messageToWorker: WorkerInput = {
+                copiedData: ccopiedData,
                 seqStart,
                 seqEnd,
                 workerOptions,
@@ -829,19 +722,98 @@ export class AtomicalOperationBuilder {
                 fundingUtxo,
                 fees,
                 performBitworkForCommitTx,
+                // @ts-ignore
                 workerBitworkInfoCommit,
-                scriptP2TR,
-                hashLockP2TR,
+                stop: false
             };
-            worker.postMessage(messageToWorker);
-            workers.push(worker);
+            messageInputs.push(messageToWorker)
+            promises.push(doWork(messageToWorker))
         }
+
+        let message: WorkerOut = await new Promise((resolve, reject) => {
+            Promise.race(promises).then((data) => {
+                for (let mesasgeInput of messageInputs) {
+                    // @ts-ignore
+                    mesasgeInput.stop = true
+                }
+                resolve(data)
+            }).catch(e => {
+                console.error(e)
+            })
+        })
+
+        console.log("Solution found, try composing the transaction...");
+        const atomPayload = new AtomicalsPayload(
+            message.finalCopyData
+        );
+
+        const updatedBaseCommit: {
+            scriptP2TR;
+            hashLockP2TR;
+            hashscript;
+        } = prepareCommitRevealConfig(
+            workerOptions.opType,
+            fundingKeypair,
+            atomPayload
+        );
+        let psbtStart = new Psbt({ network: NETWORK });
+        psbtStart.setVersion(1);
+
+        psbtStart.addInput({
+            hash: fundingUtxo.txid,
+            index: fundingUtxo.index,
+            sequence: message.finalSequence,
+            tapInternalKey: Buffer.from(
+                fundingKeypair.childNodeXOnlyPubkey as number[]
+            ),
+            witnessUtxo: {
+                value: fundingUtxo.value,
+                script: Buffer.from(fundingKeypair.output, "hex"),
+            },
+        });
+        psbtStart.addOutput({
+            address: updatedBaseCommit.scriptP2TR.address,
+            value: this.getOutputValueForCommit(fees),
+        });
+
+        this.addCommitChangeOutputIfRequired(
+            fundingUtxo.value,
+            fees,
+            psbtStart,
+            fundingKeypair.address
+        );
+
+        psbtStart.signInput(0, fundingKeypair.tweakedChildNode);
+        psbtStart.finalizeAllInputs();
+
+        const interTx = psbtStart.extractTransaction();
+
+        const rawtx = interTx.toHex();
+        AtomicalOperationBuilder.finalSafetyCheckForExcessiveFee(
+            psbtStart,
+            interTx
+        );
+        if (!this.broadcastWithRetries(rawtx)) {
+            console.log("Error sending", interTx.getId(), rawtx);
+            throw new Error(
+                "Unable to broadcast commit transaction after attempts: " +
+                interTx.getId()
+            );
+        } else {
+            console.log("Success sent tx: ", interTx.getId());
+        }
+
+        commitMinedWithBitwork = true;
+        performBitworkForCommitTx = false;
+        // In both scenarios we copy over the args
+        if (!performBitworkForCommitTx) {
+            scriptP2TR = updatedBaseCommit.scriptP2TR;
+            hashLockP2TR = updatedBaseCommit.hashLockP2TR;
+        }
+
 
         console.log("Stay calm and grab a drink! Miner workers have started mining... ");
 
-        // Await results from workers
-        const messageFromWorker = await workerPromise;
-        console.log("Workers have completed their tasks.");
 
         ////////////////////////////////////////////////////////////////////////
         // Begin Reveal Transaction
@@ -1145,21 +1117,21 @@ export class AtomicalOperationBuilder {
 
         return Math.ceil(
             (this.options.satsbyte as any) *
-                (BASE_BYTES +
-                    // Reveal input
-                    REVEAL_INPUT_BYTES_BASE +
-                    (hashLockCompactSizeBytes + hashLockP2TROutputLen) / 4 +
-                    // Additional inputs
-                    this.inputUtxos.length * INPUT_BYTES_BASE +
-                    // Outputs
-                    this.additionalOutputs.length * OUTPUT_BYTES_BASE)
+            (BASE_BYTES +
+                // Reveal input
+                REVEAL_INPUT_BYTES_BASE +
+                (hashLockCompactSizeBytes + hashLockP2TROutputLen) / 4 +
+                // Additional inputs
+                this.inputUtxos.length * INPUT_BYTES_BASE +
+                // Outputs
+                this.additionalOutputs.length * OUTPUT_BYTES_BASE)
         );
     }
 
     calculateFeesRequiredForCommit(): number {
-        let fees =  Math.ceil(
+        let fees = Math.ceil(
             (this.options.satsbyte as any) *
-                (BASE_BYTES + 1 * INPUT_BYTES_BASE + 1 * OUTPUT_BYTES_BASE)
+            (BASE_BYTES + 1 * INPUT_BYTES_BASE + 1 * OUTPUT_BYTES_BASE)
         );
         return fees;
     }

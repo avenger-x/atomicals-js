@@ -9,6 +9,8 @@
   "scripts": {
     "build": "tsc && gulp build",
     "cli": "node dist/cli.js",
+    "start": "node dist/test.js",
+    "start2": "ts-node ./lib/test.ts",
     "test": "mocha --timeout=30000 --reporter spec \"test/**/*.test.js\"",
     "e2e": "mocha --grep e2e  --timeout=300000 --reporter spec",
     "postbuild": "echo '#!/usr/bin/env node\n' | cat - dist/cli.js > temp && mv temp dist/cli.js"
@@ -46,7 +48,7 @@
     "gulp-typescript": "^6.0.0-alpha.1",
     "gulp-uglify": "^3.0.2",
     "mocha": "^9.1.3",
-    "typescript": "^4.5.4",
+    "typescript": "^5.3.3",
     "vinyl-source-stream": "^2.0.0"
   },
   "dependencies": {
@@ -73,12 +75,14 @@
     "lodash.clonedeep": "^4.5.0",
     "merkletreejs": "^0.3.11",
     "mime-types": "^2.1.35",
+    "node-fetch": "2.7.0",
     "path": "^0.12.7",
     "qrcode-terminal": "^0.12.0",
     "rpc-websockets": "^7.5.0",
     "success-motivational-quotes": "^1.0.8",
     "terminal-image": "^2.0.0",
     "tiny-secp256k1": "^2.2.1",
+    "ts-node": "^10.9.2",
     "varuint-bitcoin": "^1.1.2"
   },
   "files": [

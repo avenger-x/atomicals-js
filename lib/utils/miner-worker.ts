@@ -11,8 +11,6 @@ import { ECPairFactory, ECPairAPI, TinySecp256k1Interface } from "ecpair";
 
 const tinysecp: TinySecp256k1Interface = require("tiny-secp256k1");
 const bitcoin = require("bitcoinjs-lib");
-import * as chalk from "chalk";
-import axios from 'axios'
 
 bitcoin.initEccLib(ecc);
 import { initEccLib, networks, Psbt } from "bitcoinjs-lib";
@@ -30,14 +28,16 @@ import {
     FeeCalculations,
     MAX_SEQUENCE,
     OUTPUT_BYTES_BASE,
+    WorkerOut,
 } from "./atomical-operation-builder";
 import { Worker } from "worker_threads";
 import { ATOMICALS_PROTOCOL_ENVELOPE_ID } from "../types/protocol-tags";
 import { chunkBuffer } from "./file-utils";
+import * as fetch from 'node-fetch';
 
 const ECPair: ECPairAPI = ECPairFactory(tinysecp);
 
-interface WorkerInput {
+export interface WorkerInput {
     copiedData: AtomicalsPayload;
     seqStart: number;
     seqEnd: number;
@@ -46,15 +46,12 @@ interface WorkerInput {
     fundingUtxo: any;
     fees: FeeCalculations;
     performBitworkForCommitTx: boolean;
-    workerBitworkInfoCommit: BitworkInfo;
-    iscriptP2TR: any;
-    ihashLockP2TR: any;
+    workerBitworkInfoCommit: BitworkInfo | null;
+    stop: boolean
 }
 
-// This is the worker's message event listener
-if (parentPort) {
-    parentPort.on("message", async (message: WorkerInput) => {
-        // Extract parameters from the message
+export function doWork(message: WorkerInput): Promise<WorkerOut> {
+    return new Promise(async (resolve, reject) => {
         const {
             copiedData,
             seqStart,
@@ -63,23 +60,17 @@ if (parentPort) {
             fundingWIF,
             fundingUtxo,
             fees,
-            performBitworkForCommitTx,
             workerBitworkInfoCommit,
-            iscriptP2TR,
-            ihashLockP2TR,
         } = message;
 
         let sequence = seqStart;
-        let workerPerformBitworkForCommitTx = performBitworkForCommitTx;
-        let scriptP2TR = iscriptP2TR;
-        let hashLockP2TR = ihashLockP2TR;
 
         const fundingKeypairRaw = ECPair.fromWIF(fundingWIF);
         const fundingKeypair = getKeypairInfo(fundingKeypairRaw);
 
         copiedData["args"]["nonce"] = Math.floor(Math.random() * 10000000);
         copiedData["args"]["time"] = Math.floor(Date.now() / 1000);
-
+        
         let atomPayload = new AtomicalsPayload(copiedData);
 
         let updatedBaseCommit: { scriptP2TR; hashLockP2TR; hashscript } =
@@ -88,7 +79,6 @@ if (parentPort) {
                 fundingKeypair,
                 atomPayload
             );
-
         const tabInternalKey = Buffer.from(
             fundingKeypair.childNodeXOnlyPubkey as number[]
         );
@@ -117,12 +107,11 @@ if (parentPort) {
             needChangeFeeOutput = true;
         }
 
-        let prelimTx;
         let fixedOutput = {
             address: updatedBaseCommit.scriptP2TR.address,
             value: getOutputValueForCommit(fees),
         };
-        let finalCopyData, finalPrelimTx, finalSequence;
+        let finalCopyData
         
 
         let psbtStart = new Psbt({ network: NETWORK });
@@ -147,124 +136,277 @@ if (parentPort) {
         }
 
         psbtStart.signInput(0, fundingKeypair.tweakedChildNode);
-        let resp = await axios.post('http://localhost:8080/mine', {
-            start_seq: seqStart,
-            end_seq: seqEnd,
-            template_psbt_hex: psbtStart.toBuffer().toString('hex'),
-            bitwork: workerBitworkInfoCommit?.prefix,
-            bitworkx: workerBitworkInfoCommit?.ext
+        
+        
+        let controller = new AbortController();
+        fetch('http://localhost:8080/mine', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                start_seq: seqStart,
+                end_seq: seqEnd,
+                template_psbt_hex: psbtStart.toBuffer().toString('hex'),
+                bitwork: workerBitworkInfoCommit?.prefix,
+                bitworkx: workerBitworkInfoCommit?.ext
+            }),
+            signal: controller.signal
+        }).then(async (resp) => {
+            let data = await resp.json();
+            if(data.code == 0) {
+                // send a result or message back to the main thread
+                finalCopyData = copiedData
+                sequence = data.data
+                console.log(
+                    "got one finalCopyData:" + JSON.stringify(finalCopyData)
+                );
+                console.log("got one finalSequence:" + JSON.stringify(sequence));
+                console.log({
+                    finalCopyData,
+                    finalSequence: sequence,
+                })
+                resolve({
+                    finalCopyData,
+                    finalSequence: sequence,
+                })
+            }
+        }).catch(e => {
+            // @ts-ignore
+            if (e.name === 'AbortError') {
+                return
+            }
+            console.error(e)
         })
-        if(resp.data.code == 0) {
-            // send a result or message back to the main thread
-            finalCopyData = copiedData
-            sequence = resp.data.data
-            console.log(
-                "got one finalCopyData:" + JSON.stringify(finalCopyData)
-            );
-            console.log("got one finalSequence:" + JSON.stringify(sequence));
-            console.log({
-                finalCopyData,
-                finalSequence: sequence,
-            })
-            parentPort!.postMessage({
-                finalCopyData,
-                finalSequence: sequence,
-            });
+        while(true) {
+            if(message.stop) {
+                controller.abort()
+                reject('stop')
+                return
+            }
+            await sleep(100)
         }
-
-
-        // // Start mining loop, terminates when a valid proof of work is found or stopped manually
-        // do {
-        //     // Introduce a minor delay to avoid overloading the CPU
-        //     await sleep(0);
-
-        //     // This worker has tried all assigned sequence range but it did not find solution.
-        //     if (sequence > seqEnd) {
-        //         finalSequence = -1;
-        //     }
-        //     if (sequence % 10000 == 0) {
-        //         console.log(
-        //             "Started mining for sequence: " +
-        //             sequence +
-        //             " - " +
-        //             Math.min(sequence + 10000, MAX_SEQUENCE)
-        //         );
-        //     }
-
-        //     // Create a new PSBT (Partially Signed Bitcoin Transaction)
-        //     let psbtStart = new Psbt({ network: NETWORK });
-        //     psbtStart.setVersion(1);
-
-        //     // Add input and output to PSBT
-        //     psbtStart.addInput({
-        //         hash: fundingUtxo.txid,
-        //         index: fundingUtxo.index,
-        //         sequence: sequence,
-        //         tapInternalKey: tabInternalKey,
-        //         witnessUtxo: witnessUtxo,
-        //     });
-        //     psbtStart.addOutput(fixedOutput);
-
-        //     // Add change output if needed
-        //     if (needChangeFeeOutput) {
-        //         psbtStart.addOutput({
-        //             address: fundingKeypair.address,
-        //             value: differenceBetweenCalculatedAndExpected,
-        //         });
-        //     }
-
-        //     psbtStart.signInput(0, fundingKeypair.tweakedChildNode);
-        //     psbtStart.finalizeAllInputs();
-        //     // Extract the transaction and get its ID
-        //     prelimTx = psbtStart.extractTransaction();
-        //     const checkTxid = prelimTx.getId();
-
-        //     // Check if there is a valid proof of work
-        //     if (
-        //         workerPerformBitworkForCommitTx &&
-        //         hasValidBitwork(
-        //             checkTxid,
-        //             workerBitworkInfoCommit?.prefix as any,
-        //             workerBitworkInfoCommit?.ext as any
-        //         )
-        //     ) {
-        //         // Valid proof of work found, log success message
-        //         console.log(
-        //             chalk.green(prelimTx.getId(), ` sequence: (${sequence})`)
-        //         );
-        //         console.log(
-        //             "\nBitwork matches commit txid! ",
-        //             prelimTx.getId(),
-        //             `@ time: ${Math.floor(Date.now() / 1000)}`
-        //         );
-
-        //         finalCopyData = copiedData;
-        //         finalPrelimTx = prelimTx;
-        //         finalSequence = sequence;
-        //         workerPerformBitworkForCommitTx = false;
-        //         break;
-        //     }
-
-        //     sequence++;
-        // } while (workerPerformBitworkForCommitTx);
-
-        // if (finalSequence && finalSequence != -1) {
-        //     // send a result or message back to the main thread
-        //     console.log(
-        //         "got one finalCopyData:" + JSON.stringify(finalCopyData)
-        //     );
-        //     console.log(
-        //         "got one finalPrelimTx:" + JSON.stringify(finalPrelimTx)
-        //     );
-        //     console.log("got one finalSequence:" + JSON.stringify(sequence));
-
-        //     parentPort!.postMessage({
-        //         finalCopyData,
-        //         finalSequence: sequence,
-        //     });
-        // }
-    });
+    })
 }
+
+// This is the worker's message event listener
+// if (parentPort) {
+//     parentPort.on("message", async (message: WorkerInput) => {
+//         // Extract parameters from the message
+//         const {
+//             copiedData,
+//             seqStart,
+//             seqEnd,
+//             workerOptions,
+//             fundingWIF,
+//             fundingUtxo,
+//             fees,
+//             workerBitworkInfoCommit,
+//         } = message;
+
+//         let sequence = seqStart;
+
+//         const fundingKeypairRaw = ECPair.fromWIF(fundingWIF);
+//         const fundingKeypair = getKeypairInfo(fundingKeypairRaw);
+
+//         copiedData["args"]["nonce"] = Math.floor(Math.random() * 10000000);
+//         copiedData["args"]["time"] = Math.floor(Date.now() / 1000);
+
+//         let atomPayload = new AtomicalsPayload(copiedData);
+
+//         let updatedBaseCommit: { scriptP2TR; hashLockP2TR; hashscript } =
+//             workerPrepareCommitRevealConfig(
+//                 workerOptions.opType,
+//                 fundingKeypair,
+//                 atomPayload
+//             );
+
+//         const tabInternalKey = Buffer.from(
+//             fundingKeypair.childNodeXOnlyPubkey as number[]
+//         );
+//         const witnessUtxo = {
+//             value: fundingUtxo.value,
+//             script: Buffer.from(fundingKeypair.output, "hex"),
+//         };
+
+//         const totalInputsValue = fundingUtxo.value;
+//         const totalOutputsValue = getOutputValueForCommit(fees);
+//         const calculatedFee = totalInputsValue - totalOutputsValue;
+
+//         let needChangeFeeOutput = false;
+//         // In order to keep the fee-rate unchanged, we should add extra fee for the new added change output.
+//         const expectedFee =
+//             fees.commitFeeOnly +
+//             (workerOptions.satsbyte as any) * OUTPUT_BYTES_BASE;
+//         const differenceBetweenCalculatedAndExpected =
+//             calculatedFee - expectedFee;
+//         if (
+//             calculatedFee > 0 &&
+//             differenceBetweenCalculatedAndExpected > 0 &&
+//             differenceBetweenCalculatedAndExpected >= DUST_AMOUNT
+//         ) {
+//             // There were some excess satoshis, but let's verify that it meets the dust threshold to make change
+//             needChangeFeeOutput = true;
+//         }
+
+//         let prelimTx;
+//         let fixedOutput = {
+//             address: updatedBaseCommit.scriptP2TR.address,
+//             value: getOutputValueForCommit(fees),
+//         };
+//         let finalCopyData, finalPrelimTx, finalSequence;
+        
+
+//         let psbtStart = new Psbt({ network: NETWORK });
+//         psbtStart.setVersion(1);
+
+//         // Add input and output to PSBT
+//         psbtStart.addInput({
+//             hash: fundingUtxo.txid,
+//             index: fundingUtxo.index,
+//             sequence: sequence,
+//             tapInternalKey: tabInternalKey,
+//             witnessUtxo: witnessUtxo,
+//         });
+//         psbtStart.addOutput(fixedOutput);
+
+//         // Add change output if needed
+//         if (needChangeFeeOutput) {
+//             psbtStart.addOutput({
+//                 address: fundingKeypair.address,
+//                 value: differenceBetweenCalculatedAndExpected,
+//             });
+//         }
+
+//         psbtStart.signInput(0, fundingKeypair.tweakedChildNode);
+        
+//           parentPort!.on('message', (message) => {
+//             if (message === 'terminate') {
+//               // 在接收到 terminate 消息时关闭服务器
+//               console.log("?")
+//             }
+//           });
+        
+          
+//         let resp = await axios.post('http://localhost:8080/mine', {
+//             start_seq: seqStart,
+//             end_seq: seqEnd,
+//             template_psbt_hex: psbtStart.toBuffer().toString('hex'),
+//             bitwork: workerBitworkInfoCommit?.prefix,
+//             bitworkx: workerBitworkInfoCommit?.ext
+//         })
+//         if(resp.data.code == 0) {
+//             // send a result or message back to the main thread
+//             finalCopyData = copiedData
+//             sequence = resp.data.data
+//             console.log(
+//                 "got one finalCopyData:" + JSON.stringify(finalCopyData)
+//             );
+//             console.log("got one finalSequence:" + JSON.stringify(sequence));
+//             console.log({
+//                 finalCopyData,
+//                 finalSequence: sequence,
+//             })
+//             parentPort!.postMessage({
+//                 finalCopyData,
+//                 finalSequence: sequence,
+//             });
+//         }
+        
+
+
+//         // // Start mining loop, terminates when a valid proof of work is found or stopped manually
+//         // do {
+//         //     // Introduce a minor delay to avoid overloading the CPU
+//         //     await sleep(0);
+
+//         //     // This worker has tried all assigned sequence range but it did not find solution.
+//         //     if (sequence > seqEnd) {
+//         //         finalSequence = -1;
+//         //     }
+//         //     if (sequence % 10000 == 0) {
+//         //         console.log(
+//         //             "Started mining for sequence: " +
+//         //             sequence +
+//         //             " - " +
+//         //             Math.min(sequence + 10000, MAX_SEQUENCE)
+//         //         );
+//         //     }
+
+//         //     // Create a new PSBT (Partially Signed Bitcoin Transaction)
+//         //     let psbtStart = new Psbt({ network: NETWORK });
+//         //     psbtStart.setVersion(1);
+
+//         //     // Add input and output to PSBT
+//         //     psbtStart.addInput({
+//         //         hash: fundingUtxo.txid,
+//         //         index: fundingUtxo.index,
+//         //         sequence: sequence,
+//         //         tapInternalKey: tabInternalKey,
+//         //         witnessUtxo: witnessUtxo,
+//         //     });
+//         //     psbtStart.addOutput(fixedOutput);
+
+//         //     // Add change output if needed
+//         //     if (needChangeFeeOutput) {
+//         //         psbtStart.addOutput({
+//         //             address: fundingKeypair.address,
+//         //             value: differenceBetweenCalculatedAndExpected,
+//         //         });
+//         //     }
+
+//         //     psbtStart.signInput(0, fundingKeypair.tweakedChildNode);
+//         //     psbtStart.finalizeAllInputs();
+//         //     // Extract the transaction and get its ID
+//         //     prelimTx = psbtStart.extractTransaction();
+//         //     const checkTxid = prelimTx.getId();
+
+//         //     // Check if there is a valid proof of work
+//         //     if (
+//         //         workerPerformBitworkForCommitTx &&
+//         //         hasValidBitwork(
+//         //             checkTxid,
+//         //             workerBitworkInfoCommit?.prefix as any,
+//         //             workerBitworkInfoCommit?.ext as any
+//         //         )
+//         //     ) {
+//         //         // Valid proof of work found, log success message
+//         //         console.log(
+//         //             chalk.green(prelimTx.getId(), ` sequence: (${sequence})`)
+//         //         );
+//         //         console.log(
+//         //             "\nBitwork matches commit txid! ",
+//         //             prelimTx.getId(),
+//         //             `@ time: ${Math.floor(Date.now() / 1000)}`
+//         //         );
+
+//         //         finalCopyData = copiedData;
+//         //         finalPrelimTx = prelimTx;
+//         //         finalSequence = sequence;
+//         //         workerPerformBitworkForCommitTx = false;
+//         //         break;
+//         //     }
+
+//         //     sequence++;
+//         // } while (workerPerformBitworkForCommitTx);
+
+//         // if (finalSequence && finalSequence != -1) {
+//         //     // send a result or message back to the main thread
+//         //     console.log(
+//         //         "got one finalCopyData:" + JSON.stringify(finalCopyData)
+//         //     );
+//         //     console.log(
+//         //         "got one finalPrelimTx:" + JSON.stringify(finalPrelimTx)
+//         //     );
+//         //     console.log("got one finalSequence:" + JSON.stringify(sequence));
+
+//         //     parentPort!.postMessage({
+//         //         finalCopyData,
+//         //         finalSequence: sequence,
+//         //     });
+//         // }
+//     });
+// }
 
 function getOutputValueForCommit(fees: FeeCalculations): number {
     let sum = 0;
