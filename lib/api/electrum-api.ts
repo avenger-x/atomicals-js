@@ -77,6 +77,7 @@ export class ElectrumApi implements ElectrumApiInterface {
         return new Promise((resolve, reject) => {
             this.call('blockchain.scripthash.listunspent', [scriptHash]).then(function (result: any) {
                 const data = {unconfirmed: 0, confirmed: 0, utxos: [] as UTXO[]};
+                console.log(result)
                 for (const utxo of result) {
                     if (!utxo.height || utxo.height <= 0) {
                         data.unconfirmed += utxo.value;
