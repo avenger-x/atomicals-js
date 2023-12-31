@@ -113,10 +113,14 @@ export class ElectrumApi implements ElectrumApiInterface {
             const checkForUtxo = async () => {
                 console.log('...');
                 try {
+                    console.log("a")
                     const response: any = await this.getUnspentAddress(address).catch((e) => {
+                        console.log("c")
                         console.error(e);
                         return {unconfirmed: 0, confirmed: 0, utxos: []};
                     });
+                    console.log("b")
+                    console.log(response.utxos)
                     const utxos = response.utxos.sort((a, b) => a.value - b.value);
                     for (const utxo of utxos) {
                         // Do not use utxos that have attached atomicals
@@ -127,18 +131,21 @@ export class ElectrumApi implements ElectrumApiInterface {
                         if (exactSatoshiAmount) {
                             if (utxo.value === satoshis) {
                                 clearInterval(intervalId);
+                                console.log("xxx")
                                 resolve(utxo);
                                 return;
                             }
                         } else {
                             if (utxo.value >= satoshis) {
                                 clearInterval(intervalId);
+                                console.log("eeee")
                                 resolve(utxo);
                                 return;
                             }
                         }
                     }
 
+                    console.log("d")
                 } catch (error) {
                     console.error(error);
                     reject(error);
