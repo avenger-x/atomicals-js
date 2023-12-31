@@ -14,6 +14,7 @@ import { toOutputScript } from 'bitcoinjs-lib/src/address';
 import { compactIdToOutpoint, outpointToCompactId } from './utils/atomical-format-helpers';
 import * as quotes from 'success-motivational-quotes'; 
 import * as chalk from 'chalk';
+import { sleeper } from './utils/utils';
  
 dotenv.config();
 
@@ -1581,6 +1582,7 @@ program.command('mint-dft')
           disableMiningChalk: options.disablechalk,
         }, walletRecord.address, ticker, fundingRecord.WIF);
         handleResultLogging(result, true);
+        await sleeper(60) // 等待一分钟
       } catch (error) {
         console.log(error);
       }
