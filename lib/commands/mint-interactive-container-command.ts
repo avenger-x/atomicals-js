@@ -13,6 +13,7 @@ import { GetByContainerCommand } from "./get-by-container-command";
 import { checkBaseRequestOptions, isValidBitworkMinimum, isValidBitworkString } from "../utils/atomical-format-helpers";
 import { getAndCheckAtomicalInfo } from "./command-helpers";
 import { getKeypairInfo } from "../utils/address-keypair-path";
+import { MempoolApi } from "../api/mempool-api";
 const tinysecp: TinySecp256k1Interface = require('tiny-secp256k1');
 initEccLib(tinysecp as any);
 const ECPair: ECPairAPI = ECPairFactory(tinysecp);
@@ -46,6 +47,7 @@ export class MintInteractiveContainerCommand implements CommandInterface {
     }
 
     const atomicalBuilder = new AtomicalOperationBuilder({
+      mempoolApi: new MempoolApi(),
       electrumApi: this.electrumApi,
       rbf: this.options.rbf,
       satsbyte: this.options.satsbyte,

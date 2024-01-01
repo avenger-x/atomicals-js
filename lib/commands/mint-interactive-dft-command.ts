@@ -12,6 +12,7 @@ import { getKeypairInfo } from "../utils/address-keypair-path";
 import { checkBaseRequestOptions, decorateAtomical } from "../utils/atomical-format-helpers";
 import { BaseRequestOptions } from "../interfaces/api.interface";
 import { AtomicalOperationBuilder } from "../utils/atomical-operation-builder";
+import { MempoolApi } from "../api/mempool-api";
 const tinysecp: TinySecp256k1Interface = require('tiny-secp256k1');
 initEccLib(tinysecp as any);
 const ECPair: ECPairAPI = ECPairFactory(tinysecp);
@@ -83,6 +84,7 @@ export class MintInteractiveDftCommand implements CommandInterface {
  
     console.log('atomicalDecorated', atomicalResponse, atomicalDecorated);
     const atomicalBuilder = new AtomicalOperationBuilder({
+      mempoolApi: new MempoolApi(),
       electrumApi: this.electrumApi,
       rbf: this.options.rbf,
       satsbyte: this.options.satsbyte,

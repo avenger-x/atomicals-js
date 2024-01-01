@@ -15,6 +15,7 @@ import { GetAtomicalsAtLocationCommand } from "./get-atomicals-at-location-comma
 import { GetUtxoPartialFromLocation } from "../utils/address-helpers";
 import { IInputUtxoPartial } from "../types/UTXO.interface";
 import { hasAtomicalType, isAtomicalId } from "../utils/atomical-format-helpers";
+import { MempoolApi } from "../api/mempool-api";
 
 const tinysecp: TinySecp256k1Interface = require('tiny-secp256k1');
 initEccLib(tinysecp as any);
@@ -53,6 +54,7 @@ export class SplitInteractiveCommand implements CommandInterface {
 
     const inputUtxoPartial: IInputUtxoPartial | any = GetUtxoPartialFromLocation(this.owner.address, response.data.location_info);
     const atomicalBuilder = new AtomicalOperationBuilder({
+      mempoolApi: new MempoolApi(),
       electrumApi: this.electrumApi,
       rbf: this.options.rbf,
       satsbyte: this.options.satsbyte,

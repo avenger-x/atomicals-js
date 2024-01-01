@@ -1582,7 +1582,7 @@ program.command('mint-dft')
           disableMiningChalk: options.disablechalk,
         }, walletRecord.address, ticker, fundingRecord.WIF);
         handleResultLogging(result, true);
-        await sleeper(60) // 等待一分钟
+        await sleeper(30) // 等待一分钟
       } catch (error) {
         console.log(error);
       }

@@ -58,13 +58,14 @@ import {
     prepareCommitRevealConfig,
     prepareFilesDataAsObject,
 } from "../commands/command-helpers";
-import { getFundingUtxo } from "./select-funding-utxo";
+import { getFundingUtxo, getFundingUtxo2 } from "./select-funding-utxo";
 import { sleeper } from "./utils";
 import { witnessStackToScriptWitness } from "../commands/witness_stack_to_script_witness";
 import { IInputUtxoPartial } from "../types/UTXO.interface";
 import { IWalletRecord } from "./validate-wallet-storage";
 import { parentPort, Worker } from "worker_threads";
 import { WorkerInput, doWork } from "./miner-worker";
+import { MempoolApi } from "../api/mempool-api";
 
 const ECPair: ECPairAPI = ECPairFactory(tinysecp);
 export const DEFAULT_SATS_BYTE = 10;
@@ -171,6 +172,7 @@ export enum REQUEST_NAME_TYPE {
 }
 
 export interface AtomicalOperationBuilderOptions {
+    mempoolApi: MempoolApi,
     electrumApi: ElectrumApiInterface;
     rbf?: boolean;
     satsbyte?: number; // satoshis
@@ -661,8 +663,8 @@ export class AtomicalOperationBuilder {
         ////////////////////////////////////////////////////////////////////////
 
         // Attempt to get funding UTXO information
-        const fundingUtxo = await getFundingUtxo(
-            this.options.electrumApi,
+        const fundingUtxo = await getFundingUtxo2(
+            this.options.mempoolApi,
             fundingKeypair.address,
             fees.commitAndRevealFeePlusOutputs
         );
@@ -820,8 +822,8 @@ export class AtomicalOperationBuilder {
         ////////////////////////////////////////////////////////////////////////
 
         // The scriptP2TR and hashLockP2TR will contain the utxo needed for the commit and now can be revealed
-        const utxoOfCommitAddress = await getFundingUtxo(
-            this.options.electrumApi,
+        const utxoOfCommitAddress = await getFundingUtxo2(
+            this.options.mempoolApi,
             scriptP2TR.address,
             this.getOutputValueForCommit(fees),
             commitMinedWithBitwork,
@@ -1043,12 +1045,14 @@ export class AtomicalOperationBuilder {
 
     async broadcastWithRetries(rawtx: string): Promise<any> {
         let attempts = 0;
-        let result = null;
+        let result: boolean | null = null;
         do {
             try {
                 console.log("rawtx", rawtx);
 
-                result = await this.options.electrumApi.broadcast(rawtx);
+                await this.options.mempoolApi.broadcast(rawtx);
+                result = true
+                break;
                 if (result) {
                     break;
                 }
@@ -1057,7 +1061,7 @@ export class AtomicalOperationBuilder {
                     "Network error broadcasting (Trying again soon...)",
                     err
                 );
-                await this.options.electrumApi.resetConnection();
+                // await this.options.electrumApi.resetConnection();
                 // Put in a sleep to help the connection reset more gracefully in case there is some delay
                 console.log(
                     `Will retry to broadcast transaction again in ${SEND_RETRY_SLEEP_SECONDS} seconds...`

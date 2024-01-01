@@ -11,6 +11,7 @@ import { prepareFilesDataAsObject } from "./command-helpers";
 import { AtomicalOperationBuilder } from "../utils/atomical-operation-builder";
 import { BaseRequestOptions } from "../interfaces/api.interface";
 import { checkBaseRequestOptions, isValidBitworkString } from "../utils/atomical-format-helpers";
+import { MempoolApi } from "../api/mempool-api";
 const tinysecp: TinySecp256k1Interface = require('tiny-secp256k1');
 initEccLib(tinysecp as any);
 export class MintInteractiveNftCommand implements CommandInterface {
@@ -27,6 +28,7 @@ export class MintInteractiveNftCommand implements CommandInterface {
 
   async run(): Promise<any> {
     const atomicalBuilder = new AtomicalOperationBuilder({
+      mempoolApi: new MempoolApi(),
       electrumApi: this.electrumApi,
       rbf: this.options.rbf,
       satsbyte: this.options.satsbyte,

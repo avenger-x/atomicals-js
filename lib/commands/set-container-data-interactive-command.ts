@@ -11,6 +11,7 @@ import { getAndCheckAtomicalInfo, logBanner, prepareFilesDataAsObject, readJsonF
 import { AtomicalOperationBuilder } from "../utils/atomical-operation-builder";
 import { BaseRequestOptions } from "../interfaces/api.interface";
 import { IWalletRecord } from "../utils/validate-wallet-storage";
+import { MempoolApi } from "../api/mempool-api";
 
 const tinysecp: TinySecp256k1Interface = require('tiny-secp256k1');
 initEccLib(tinysecp as any);
@@ -32,6 +33,7 @@ export class SetContainerDataInteractiveCommand implements CommandInterface {
     let filesData = await readJsonFileAsCompleteDataObjectEncodeAtomicalIds(this.filename, true);
     const { atomicalInfo, locationInfo, inputUtxoPartial } = await getAndCheckAtomicalInfo(this.electrumApi, this.containerName, this.owner.address, 'NFT', 'container');
     const atomicalBuilder = new AtomicalOperationBuilder({
+      mempoolApi: new MempoolApi(),
       electrumApi: this.electrumApi,
       rbf: this.options.rbf,
       satsbyte: this.options.satsbyte,

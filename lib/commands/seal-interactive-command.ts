@@ -12,6 +12,7 @@ import { getAndCheckAtomicalInfo, logBanner } from "./command-helpers";
 import { IWalletRecord } from "../utils/validate-wallet-storage";
 import { BaseRequestOptions } from "../interfaces/api.interface";
 import { AtomicalOperationBuilder } from "../utils/atomical-operation-builder";
+import { MempoolApi } from "../api/mempool-api";
 const tinysecp: TinySecp256k1Interface = require('tiny-secp256k1');
 initEccLib(tinysecp as any);
 
@@ -29,6 +30,7 @@ export class SealInteractiveCommand implements CommandInterface {
     logBanner(`Seal Interactive`);
     const { atomicalInfo, locationInfo, inputUtxoPartial } = await getAndCheckAtomicalInfo(this.electrumApi, this.atomicalId, this.owner.address);
     const atomicalBuilder = new AtomicalOperationBuilder({
+      mempoolApi: new MempoolApi(),
       electrumApi: this.electrumApi,
       rbf: this.options.rbf,
       satsbyte: this.options.satsbyte,

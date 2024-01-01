@@ -3,6 +3,7 @@ import { type UTXO } from "../types/UTXO.interface";
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import * as qrcode from 'qrcode-terminal';
+import { MempoolApi } from "../api/mempool-api";
 bitcoin.initEccLib(ecc);
 
 export const getInputUtxoFromTxid = async (utxo: UTXO, electrumx: ElectrumApiInterface) => {
@@ -56,6 +57,30 @@ export const getFundingUtxo = async (electrumxApi, address: string, amount: numb
   console.log(`...`)
   console.log(`...`)
   const fundingUtxo = await electrumxApi.waitUntilUTXO(address, amount, seconds ? 5 : seconds, false);
+  console.log(`Detected Funding UTXO (${fundingUtxo.txid}:${fundingUtxo.vout}) with value ${fundingUtxo.value} for funding...`);
+  return fundingUtxo
+}
+
+/**
+     * Gets a funding UTXO and also displays qr code for quick deposit
+     * @param address
+     * @param amount
+     * @returns
+     */
+export const getFundingUtxo2 = async (mempoolApi, address: string, amount: number, suppressDepositAddressInfo = false, seconds = 5) => {
+  // We are expected to perform commit work, therefore we must fund with an existing UTXO first to generate the commit deposit address
+  if (!suppressDepositAddressInfo) {
+    qrcode.generate(address, { small: false });
+  }
+  // If commit POW was requested, then we will use a UTXO from the funding wallet to generate it
+  console.log(`...`)
+  console.log(`...`)
+  if (!suppressDepositAddressInfo) {
+    console.log(`WAITING UNTIL ${amount / 100000000} BTC RECEIVED AT ${address}`)
+  }
+  console.log(`...`)
+  console.log(`...`)
+  const fundingUtxo = await mempoolApi.waitUntilUTXO(address, amount, seconds ? 5 : seconds, false);
   console.log(`Detected Funding UTXO (${fundingUtxo.txid}:${fundingUtxo.vout}) with value ${fundingUtxo.value} for funding...`);
   return fundingUtxo
 }
